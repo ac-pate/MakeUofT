@@ -1,4 +1,4 @@
-# MakeUofT
+# SightSync
 
 
 Overview:
