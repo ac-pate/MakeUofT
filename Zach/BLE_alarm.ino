@@ -12,13 +12,13 @@ float last_x = 0.0, last_y = 0.0, last_z = 0.0;
 bool alarm_triggered = false;
 
 void setup() {
-  // Serial.begin(9600);
+  Serial.begin(9600);
   // while (!Serial);
 
-  // if (!IMU.begin()) {
-  //   Serial.println("Failed to initialize IMU!");
-  //   while (1);
-  // }
+  if (!IMU.begin()) {
+    Serial.println("Failed to initialize IMU!");
+    // while (1);
+  }
 
   pinMode(OUTPUT_PIN, OUTPUT);
   
@@ -40,7 +40,7 @@ void loop() {
 
   if (IMU.accelerationAvailable()) {
     IMU.readAcceleration(x, y, z);
-      // Serial.println(sqrt(sq(x) + sq(y) + sq(z)));
+      Serial.println(sqrt(sq(x) + sq(y) + sq(z)));
     if (sqrt(sq(x) + sq(y) + sq(z)) >= THRESHOLD_ACCELERATION) {
       tone(OUTPUT_PIN, 262, 3000);
       distressSignal.writeValue(&distressSignalValue, sizeof(distressSignalValue));
