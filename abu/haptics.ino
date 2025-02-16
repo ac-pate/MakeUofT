@@ -1,8 +1,8 @@
 #include <Arduino.h>
 
 // --- Pin definitions ---
-#define VIB_PIN_LEFT   2    // Left motor control pin (PWM-capable)
-#define VIB_PIN_RIGHT  12   // Right motor control pin (PWM-capable)
+#define VIB_PIN_LEFT   12    // Left motor control pin (PWM-capable)
+#define VIB_PIN_RIGHT  2   // Right motor control pin (PWM-capable)
 #define IN1            3    // Control pin for driver (if needed)
 #define IN3            11   // Control pin for driver (if needed)
 
