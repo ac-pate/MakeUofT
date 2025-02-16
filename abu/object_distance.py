@@ -1,0 +1,60 @@
+import pyrealsense2 as rs
+import numpy as np
+import cv2
+from ultralytics import YOLO
+
+# Load YOLOv8 model
+model = YOLO("yolov8n.pt")
+
+# Configure depth and color streams
+pipeline = rs.pipeline()
+config = rs.config()
+config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+
+# Start streaming
+pipeline.start(config)
+
+# Align depth to color
+align = rs.align(rs.stream.color)
+
+def get_depth_at_pixel(depth_frame, x, y):
+    """Retrieve depth in meters at a specific pixel."""
+    depth_image = np.asanyarray(depth_frame.get_data())
+    depth_value = depth_image[y, x] * 0.001  # Convert mm to meters
+    return depth_value
+
+try:
+    while True:
+        frames = pipeline.wait_for_frames()
+        aligned_frames = align.process(frames)
+        depth_frame = aligned_frames.get_depth_frame()
+        color_frame = aligned_frames.get_color_frame()
+
+        if not depth_frame or not color_frame:
+            continue
+
+        color_image = np.asanyarray(color_frame.get_data())
+        results = model(color_image)
+        
+        for r in results:
+            for box, conf, cls in zip(r.boxes.xyxy, r.boxes.conf, r.boxes.cls):
+                x1, y1, x2, y2 = map(int, box[:4])
+                center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
+                depth_value = get_depth_at_pixel(depth_frame, center_x, center_y)
+                label = model.names[int(cls)]  # Object class name
+                confidence = conf.item()  # Confidence score
+                
+                # Draw bounding box and label with depth
+                cv2.rectangle(color_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                text = f"{label} {confidence:.2f} Depth {depth_value:.2f}m"
+                cv2.putText(color_image, text, (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+        cv2.imshow("Detected Objects with Depth", color_image)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+finally:
+    pipeline.stop()
+    cv2.destroyAllWindows()
