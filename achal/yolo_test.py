@@ -12,7 +12,7 @@ model.overrides['max_det'] = 1000  # maximum number of detections per imag
 # model.export(format="ncnn", imgsz=640)  # creates 'yolov8n_ncnn_model'
 
 # Initialize webcam
-cam = cv2.VideoCapture(0)  # Use 0 for default webcam, or try other indices (1, 2, etc.) if you have multiple cameras
+cam = cv2.VideoCapture(1)  # Use 0 for default webcam, or try other indices (1, 2, etc.) if you have multiple cameras
 
 # Check if the webcam is opened correctly
 if not cam.isOpened():
