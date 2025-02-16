@@ -1,105 +1,112 @@
-import argparse
-import os
-import numpy as np
-import whisper
 import torch
-import serial  # For Arduino serial communication
-from datetime import datetime, timedelta
-from queue import Queue
-from time import sleep
-from sys import platform
+import pyaudio
+import numpy as np
+from transformers import pipeline
+import threading
+import queue
+import time
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="medium", help="Model to use",
-                        choices=["tiny", "base", "small", "medium", "large"])
-    parser.add_argument("--non_english", action='store_true',
-                        help="Don't use the english model.")
-    parser.add_argument("--energy_threshold", default=1000,
-                        help="Energy level for mic to detect.", type=int)
-    parser.add_argument("--record_timeout", default=2,
-                        help="How real time the recording is in seconds.", type=float)
-    parser.add_argument("--phrase_timeout", default=3,
-                        help="How much empty space between recordings before we "
-                             "consider it a new line in the transcription.", type=float)
-    args = parser.parse_args()
+# Initialize the ASR pipeline
+pipe = pipeline("automatic-speech-recognition",
+                "openai/whisper-small",
+                torch_dtype=torch.float16,
+                device="cuda:0" if torch.cuda.is_available() else "cpu")
 
-    # The last time a recording was retrieved from the queue.
-    phrase_time = None
-    # Thread safe Queue for passing data from the threaded recording callback.
-    data_queue = Queue()
+# Audio parameters
+CHUNK = 16000  # 1 second of audio at 16kHz
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+RATE = 16000
+SILENCE_THRESHOLD = 100  # Adjust based on your environment
 
-    # Setup serial communication to read from Arduino
-    ser = serial.Serial('COM6', 9600) #djust the baudrate to match your Arduino setup
+# Initialize PyAudio
+p = pyaudio.PyAudio()
 
-    # Load / Download model
-    model = args.model
-    if args.model != "large" and not args.non_english:
-        model = model + ".en"
-    audio_model = whisper.load_model(model)
+# Audio queue and processing flag
+audio_queue = queue.Queue()
+is_running = True
 
-    record_timeout = args.record_timeout
-    phrase_timeout = args.phrase_timeout
+def find_usb_mic():
+    for i in range(p.get_device_count()):
+        dev_info = p.get_device_info_by_index(i)
+        if (dev_info.get('maxInputChannels') > 0 and 
+            "USB" in dev_info.get('name', '')):
+            return i
+    # Fall back to default if no USB mic found
+    return p.get_default_input_device_info()['index']
 
-    transcription = ['']
+def audio_callback(in_data, frame_count, time_info, status):
+    audio_data = np.frombuffer(in_data, dtype=np.int16)
+    audio_level = np.abs(audio_data).mean()
+    print(f"Audio level: {audio_level}")  # Debug print
+    if audio_level > SILENCE_THRESHOLD:
+        audio_queue.put(audio_data)
+    return (in_data, pyaudio.paContinue)
 
-    print("Model loaded.\n")
-
-    while True:
+def process_audio():
+    buffer = []
+    buffer_seconds = 2  # Process 2 seconds of audio at a time
+    
+    while is_running:
         try:
-            now = datetime.utcnow()
+            data = audio_queue.get(timeout=1)
+            print("Received audio chunk") 
+            buffer.append(data)
             
-            # Read audio data from Arduino serial stream
-            if ser.in_waiting > 0:
-                phrase_complete = False
-                # If enough time has passed between recordings, consider the phrase complete.
-                # Clear the current working audio buffer to start over with the new data.
-                if phrase_time and now - phrase_time > timedelta(seconds=phrase_timeout):
-                    phrase_complete = True
-                # This is the last time we received new audio data from the queue.
-                phrase_time = now
+            # Process when we have enough data
+            if len(buffer) >= buffer_seconds:
+                audio_segment = np.concatenate(buffer)
                 
-                # Read data from serial port
-                audio_data = ser.read(1024)  # You can adjust the number of bytes read as necessary
-                data_queue.put(audio_data)
-
-                # Combine audio data from queue
-                audio_data = b''.join(data_queue.queue)
-                data_queue.queue.clear()
+                # Convert to float32 and normalize
+                float_data = audio_segment.astype(np.float32) / 32768.0
                 
-                # Convert in-ram buffer to something the model can use directly without needing a temp file.
-                # Convert data from 16 bit wide integers to floating point with a width of 32 bits.
-                # Clamp the audio stream frequency to a PCM wavelength compatible default of 32768hz max.
-                audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+                # Test the pipeline with a dummy input
+                dummy_input = np.zeros(16000, dtype=np.float32)
+                test_result = pipe({"raw": dummy_input, "sampling_rate": RATE})
+                print(f"Model test: {test_result}")
 
-                # Read the transcription.
-                result = audio_model.transcribe(audio_np, fp16=torch.cuda.is_available())
-                text = result['text'].strip()
+                # Transcribe
+                result = pipe({"raw": float_data, "sampling_rate": RATE})
+                if result["text"].strip():
+                    print(f"Transcription: {result['text']}")
+                
+                # Slide the window (keep the last second)
+                buffer = buffer[1:]
+        except queue.Empty:
+            pass
 
-                # If we detected a pause between recordings, add a new item to our transcription.
-                # Otherwise edit the existing one.
-                if phrase_complete:
-                    transcription.append(text)
-                else:
-                    transcription[-1] = text
+# Start stream
+device_index = find_usb_mic()
+device_index = 0
+stream = p.open(format=FORMAT,
+                channels=CHANNELS,
+                rate=RATE,
+                input=True,
+                input_device_index=device_index,
+                frames_per_buffer=CHUNK,
+                stream_callback=audio_callback)
 
-                # Clear the console to reprint the updated transcription.
-                os.system('cls' if os.name=='nt' else 'clear')
-                for line in transcription:
-                    print(line)
-                # Flush stdout.
-                print('', end='', flush=True)
-            else:
-                # Infinite loops are bad for processors, must sleep.
-                sleep(0.25)
-        except KeyboardInterrupt:
-            break
+print(f"Using microphone: {p.get_device_info_by_index(device_index)['name']}")
+print("Listening... (Press Ctrl+C to stop)")
 
-    print("\n\nTranscription:")
-    for line in transcription:
-        print(line)
+# Start processing thread
+processing_thread = threading.Thread(target=process_audio)
+processing_thread.daemon = True
+processing_thread.start()
 
-
-if __name__ == "__main__":
-    main()
+# Keep main thread alive
+try:
+    stream.start_stream()
+    while stream.is_active():
+        torch.cuda.empty_cache()  # Help prevent memory buildup
+        time.sleep(0.1)
+except KeyboardInterrupt:
+    pass
+finally:
+    is_running = False
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+    processing_thread.join()
+    print("\nStopped listening.")
