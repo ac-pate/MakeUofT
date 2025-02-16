@@ -35,7 +35,7 @@ current_object_to_find = None
 def record_audio():
     """Continuously record audio and put chunks in the queue"""
 
-    mic_index = 3  # Change this to match your USB mic index (use `pyaudio.PyAudio().get_device_info_by_index(i)`)
+    mic_index = 0  # Change this to match your USB mic index (use `pyaudio.PyAudio().get_device_info_by_index(i)`)
     
     stream = audio.open(format=FORMAT, channels=CHANNELS,
                         rate=RATE, input=True,
